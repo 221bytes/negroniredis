@@ -5,22 +5,36 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"time"
 
 	"gopkg.in/redis.v5"
 )
 
 type Middleware struct {
-	client *redis.Client
 	http.ResponseWriter
-	key string
+	client *redis.Client
+	key    string
+	config Config
+}
+
+type Config struct {
+	redisAddr           string
+	redisPort           string
+	redisPassword       string
+	cacheExpirationTime time.Duration
 }
 
 // Middleware is a struct that has a ServeHTTP method
-func NewMiddleware() *Middleware {
-	middlware := &Middleware{}
+func NewMiddleware(config Config) *Middleware {
+	middlware := &Middleware{config: config}
+	var buffer bytes.Buffer
+
+	buffer.WriteString(config.redisAddr)
+	buffer.WriteString(":")
+	buffer.WriteString(config.redisPort)
 	middlware.client = redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "",
+		Addr:     buffer.String(),
+		Password: config.redisPassword,
 		DB:       0,
 	})
 	pong, err := middlware.client.Ping().Result()
@@ -28,8 +42,18 @@ func NewMiddleware() *Middleware {
 	return middlware
 }
 
+// Middleware is a struct that has a ServeHTTP method
+func DefaultConfig() Config {
+	return Config{
+		redisAddr:           "localhost",
+		redisPort:           "6379",
+		redisPassword:       "",
+		cacheExpirationTime: time.Second * 2,
+	}
+}
+
 func (m *Middleware) Write(b []byte) (int, error) {
-	err := m.client.Set(m.key, string(b)+"cached", 0).Err()
+	err := m.client.Set(m.key, string(b), m.config.cacheExpirationTime).Err()
 	if err != nil {
 		panic(err)
 	}
@@ -38,28 +62,27 @@ func (m *Middleware) Write(b []byte) (int, error) {
 
 // The middleware handler
 func (m *Middleware) ServeHTTP(w http.ResponseWriter, req *http.Request, next http.HandlerFunc) {
-	fmt.Printf("Req: %s%s\n", req.Host, req.URL.Path)
 	var buffer bytes.Buffer
 
 	buffer.WriteString(req.Host)
 	buffer.WriteString(":")
-	buffer.WriteString(req.RequestURI)
+	buffer.WriteString(req.URL.RequestURI())
 	m.key = buffer.String()
 	ctxt := context.Background()
 	client := m.client
+	// scanner := client.Scan(0, "*", 100)
 
-	val2, err := client.Get(buffer.String()).Result()
+	cachedVal, err := client.Get(buffer.String()).Result()
 	if err == redis.Nil {
 		ctxt = context.WithValue(ctxt, "cache", nil)
 	} else if err != nil {
 		panic(err)
 	} else {
-		ctxt = context.WithValue(ctxt, "cache", val2)
+		ctxt = context.WithValue(ctxt, "cache", cachedVal)
 	}
 
 	m.ResponseWriter = w
 	if next != nil {
 		next(m, req.WithContext(ctxt))
-
 	}
 }

@@ -34,9 +34,9 @@ func main() {
 
 	n := negroni.Classic()
 
-	n.Use(negroniredis.NewMiddleware())
+	n.Use(negroniredis.NewMiddleware(negroniredis.DefaultConfig()))
 
 	n.UseHandler(mux)
 
-	n.Run(":3008")
+	n.Run(":3000")
 }
