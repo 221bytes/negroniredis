@@ -10,6 +10,12 @@ import (
 	"gopkg.in/redis.v5"
 )
 
+const (
+	Timeout  = 0
+	Endpoint = 1
+	Hybrid   = 2
+)
+
 type Middleware struct {
 	http.ResponseWriter
 	client *redis.Client
@@ -22,6 +28,18 @@ type Config struct {
 	redisPort           string
 	redisPassword       string
 	cacheExpirationTime time.Duration
+	cacheStrategy       int
+}
+
+// default configuration
+func DefaultConfig() Config {
+	return Config{
+		redisAddr:           "localhost",
+		redisPort:           "6379",
+		redisPassword:       "",
+		cacheExpirationTime: time.Second * 2,
+		cacheStrategy:       Hybrid,
+	}
 }
 
 // Middleware is a struct that has a ServeHTTP method
@@ -40,16 +58,6 @@ func NewMiddleware(config Config) *Middleware {
 	pong, err := middlware.client.Ping().Result()
 	fmt.Println(pong, err)
 	return middlware
-}
-
-// Middleware is a struct that has a ServeHTTP method
-func DefaultConfig() Config {
-	return Config{
-		redisAddr:           "localhost",
-		redisPort:           "6379",
-		redisPassword:       "",
-		cacheExpirationTime: time.Second * 2,
-	}
 }
 
 func (m *Middleware) Write(b []byte) (int, error) {
