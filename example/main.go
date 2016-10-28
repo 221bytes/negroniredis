@@ -20,11 +20,11 @@ func main() {
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
 
-		if cache := req.Context().Value("cache"); cache != nil {
+		if cache := req.Context().Value(negroniredis.ContextKey); cache != nil {
 			fmt.Fprint(w, cache)
 			return
 		}
-		time.Sleep(time.Second * 2)
+		time.Sleep(time.Millisecond * 500)
 
 		toto := exampleStruct{A: false, I: 32}
 		if err := json.NewEncoder(w).Encode(&toto); err != nil {

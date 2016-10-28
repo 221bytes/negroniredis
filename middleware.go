@@ -5,21 +5,19 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"gopkg.in/redis.v5"
 )
 
 const (
-	Timeout  = 0
-	Endpoint = 1
-	Hybrid   = 2
+	ContextKey = "NEGRONISREDISCACHE"
 )
 
 type Middleware struct {
 	http.ResponseWriter
 	client *redis.Client
-	key    string
 	config Config
 }
 
@@ -28,8 +26,11 @@ type Config struct {
 	redisPort           string
 	redisPassword       string
 	cacheExpirationTime time.Duration
-	cacheStrategy       int
+	prefix              string
 }
+
+var middleware *Middleware
+var once sync.Once
 
 // default configuration
 func DefaultConfig() Config {
@@ -38,59 +39,78 @@ func DefaultConfig() Config {
 		redisPort:           "6379",
 		redisPassword:       "",
 		cacheExpirationTime: time.Second * 2,
-		cacheStrategy:       Hybrid,
+		prefix:              "cache",
 	}
 }
 
 // Middleware is a struct that has a ServeHTTP method
 func NewMiddleware(config Config) *Middleware {
-	middlware := &Middleware{config: config}
-	var buffer bytes.Buffer
+	once.Do(func() {
 
-	buffer.WriteString(config.redisAddr)
-	buffer.WriteString(":")
-	buffer.WriteString(config.redisPort)
-	middlware.client = redis.NewClient(&redis.Options{
-		Addr:     buffer.String(),
-		Password: config.redisPassword,
-		DB:       0,
+		middleware = &Middleware{config: config}
+		var buffer bytes.Buffer
+
+		buffer.WriteString(config.redisAddr)
+		buffer.WriteString(":")
+		buffer.WriteString(config.redisPort)
+		middleware.client = redis.NewClient(&redis.Options{
+			Addr:     buffer.String(),
+			Password: config.redisPassword,
+			DB:       0,
+		})
+		pong, err := middleware.client.Ping().Result()
+		fmt.Println(pong, err)
 	})
-	pong, err := middlware.client.Ping().Result()
-	fmt.Println(pong, err)
-	return middlware
+	return middleware
 }
 
-func (m *Middleware) Write(b []byte) (int, error) {
-	err := m.client.Set(m.key, string(b), m.config.cacheExpirationTime).Err()
+type Writer struct {
+	http.ResponseWriter
+	key        string
+	reqContext context.Context
+}
+
+func (w *Writer) Write(b []byte) (int, error) {
+	// if request is already from the cache we shouldn't cache it again
+
+	if cache := w.reqContext.Value(ContextKey); cache != nil {
+		return w.ResponseWriter.Write(b)
+	}
+	// we cache new data
+	err := middleware.client.Set(w.key, string(b), middleware.config.cacheExpirationTime).Err()
 	if err != nil {
 		panic(err)
 	}
-	return m.ResponseWriter.Write(b)
+
+	return w.ResponseWriter.Write(b)
 }
 
 // The middleware handler
 func (m *Middleware) ServeHTTP(w http.ResponseWriter, req *http.Request, next http.HandlerFunc) {
 	var buffer bytes.Buffer
 
-	buffer.WriteString(req.Host)
+	buffer.WriteString(m.config.prefix)
 	buffer.WriteString(":")
+	buffer.WriteString(req.Host)
 	buffer.WriteString(req.URL.RequestURI())
-	m.key = buffer.String()
 	ctxt := context.Background()
 	client := m.client
+
 	// scanner := client.Scan(0, "*", 100)
 
 	cachedVal, err := client.Get(buffer.String()).Result()
 	if err == redis.Nil {
-		ctxt = context.WithValue(ctxt, "cache", nil)
+		ctxt = context.WithValue(ctxt, ContextKey, nil)
 	} else if err != nil {
 		panic(err)
 	} else {
-		ctxt = context.WithValue(ctxt, "cache", cachedVal)
+		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+		w.WriteHeader(http.StatusOK)
+		ctxt = context.WithValue(ctxt, ContextKey, cachedVal)
 	}
 
-	m.ResponseWriter = w
+	writer := &Writer{ResponseWriter: w, key: buffer.String(), reqContext: ctxt}
 	if next != nil {
-		next(m, req.WithContext(ctxt))
+		next(writer, req.WithContext(ctxt))
 	}
 }
