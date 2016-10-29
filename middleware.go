@@ -13,6 +13,7 @@ import (
 
 const (
 	ContextKey = "NEGRONISREDISCACHE"
+	httpMethod = "HTTP_METHOD"
 )
 
 type Middleware struct {
@@ -38,7 +39,7 @@ func DefaultConfig() Config {
 		redisAddr:           "localhost",
 		redisPort:           "6379",
 		redisPassword:       "",
-		cacheExpirationTime: time.Second * 2,
+		cacheExpirationTime: time.Second * 0,
 		prefix:              "cache",
 	}
 }
@@ -71,8 +72,13 @@ type Writer struct {
 }
 
 func (w *Writer) Write(b []byte) (int, error) {
-	// if request is already from the cache we shouldn't cache it again
 
+	// we cache only get data
+	if reqMethod := w.reqContext.Value(httpMethod); reqMethod != http.MethodGet {
+		return w.ResponseWriter.Write(b)
+	}
+
+	// if request is already from the cache we shouldn't cache it again
 	if cache := w.reqContext.Value(ContextKey); cache != nil {
 		return w.ResponseWriter.Write(b)
 	}
@@ -85,6 +91,31 @@ func (w *Writer) Write(b []byte) (int, error) {
 	return w.ResponseWriter.Write(b)
 }
 
+func handleGet(client *redis.Client, key string) context.Context {
+	ctxt := context.Background()
+	cachedVal, err := client.Get(key).Result()
+	if err == redis.Nil {
+		ctxt = context.WithValue(ctxt, ContextKey, nil)
+	} else if err != nil {
+		panic(err)
+	} else {
+		ctxt = context.WithValue(ctxt, ContextKey, cachedVal)
+	}
+	return ctxt
+}
+
+func handleModif(client *redis.Client, key string) context.Context {
+	ctxt := context.Background()
+	fmt.Println(key)
+	err := client.Del(key).Err()
+	if err == redis.Nil {
+	} else if err != nil {
+		panic(err)
+	} else {
+	}
+	return ctxt
+}
+
 // The middleware handler
 func (m *Middleware) ServeHTTP(w http.ResponseWriter, req *http.Request, next http.HandlerFunc) {
 	var buffer bytes.Buffer
@@ -93,23 +124,20 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, req *http.Request, next ht
 	buffer.WriteString(":")
 	buffer.WriteString(req.Host)
 	buffer.WriteString(req.URL.RequestURI())
-	ctxt := context.Background()
+	key := buffer.String()
 	client := m.client
 
 	// scanner := client.Scan(0, "*", 100)
 
-	cachedVal, err := client.Get(buffer.String()).Result()
-	if err == redis.Nil {
-		ctxt = context.WithValue(ctxt, ContextKey, nil)
-	} else if err != nil {
-		panic(err)
+	var ctxt context.Context
+	if req.Method == http.MethodGet {
+		ctxt = handleGet(client, key)
 	} else {
-		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		w.WriteHeader(http.StatusOK)
-		ctxt = context.WithValue(ctxt, ContextKey, cachedVal)
+		ctxt = handleModif(client, key)
 	}
+	ctxt = context.WithValue(ctxt, httpMethod, req.Method)
 
-	writer := &Writer{ResponseWriter: w, key: buffer.String(), reqContext: ctxt}
+	writer := &Writer{ResponseWriter: w, key: key, reqContext: ctxt}
 	if next != nil {
 		next(writer, req.WithContext(ctxt))
 	}
