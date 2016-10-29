@@ -12,17 +12,18 @@ import (
 )
 
 const (
-	// ContextKey is for finding the cached data in the Context
+	// ContextKey is for finding cached data in the Context
 	ContextKey = "NEGRONISREDISCACHE"
 
-	// httpMethod is for storing the method of the request in reqWriter
+	// httpMethod is for storing the method of the request in the reqWriter
 	httpMethod = "HTTP_METHOD"
 )
 
 var middleware *RedisCache
 var once sync.Once
 
-// reqWriter is for intercepting the write of the http.ResponseWriter
+// reqWriter is for intercepting the write of the http.ResponseWriter of the request and
+// save the answer to the cache
 // each request will have a different reqWriter
 type reqWriter struct {
 	http.ResponseWriter
@@ -42,7 +43,7 @@ func (w *reqWriter) Write(b []byte) (int, error) {
 		return w.ResponseWriter.Write(b)
 	}
 	// we cache new data
-	err := middleware.client.Set(w.key, string(b), middleware.config.cacheExpirationTime).Err()
+	err := middleware.RedisClient.Set(w.key, string(b), middleware.Config.CacheExpirationTime).Err()
 	if err != nil {
 		panic(err)
 	}
@@ -52,31 +53,31 @@ func (w *reqWriter) Write(b []byte) (int, error) {
 
 // RedisCache is the middleware for negroniredis
 type RedisCache struct {
-	client *redis.Client
-	config Config
+	RedisClient *redis.Client
+	Config      Config
 }
 
 // Config is all of the required fields needed by the cache
-// redisAddr, redisPassword and redisPassword are the parameters
+// RedisAddr, RedisPort and RedisPassword are the parameters
 // for the redis library 	"gopkg.in/redis.v5"
 // cacheExpirationTime is for how long each data will stay in the cache
 // prefix is the prefix of every keys in the cache
 type Config struct {
-	redisAddr           string
-	redisPort           string
-	redisPassword       string
-	cacheExpirationTime time.Duration
-	prefix              string
+	RedisAddr           string
+	RedisPort           string
+	RedisPassword       string
+	CacheExpirationTime time.Duration
+	Prefix              string
 }
 
 // DefaultConfig is basic configuration for a RedisCache
 func DefaultConfig() Config {
 	return Config{
-		redisAddr:           "localhost",
-		redisPort:           "6379",
-		redisPassword:       "",
-		cacheExpirationTime: time.Second * 2,
-		prefix:              "cache",
+		RedisAddr:           "localhost",
+		RedisPort:           "6379",
+		RedisPassword:       "",
+		CacheExpirationTime: time.Second * 2,
+		Prefix:              "cache",
 	}
 }
 
@@ -84,18 +85,18 @@ func DefaultConfig() Config {
 func NewMiddleware(config Config) *RedisCache {
 	once.Do(func() {
 
-		middleware = &RedisCache{config: config}
+		middleware = &RedisCache{Config: config}
 		var buffer bytes.Buffer
 
-		buffer.WriteString(config.redisAddr)
+		buffer.WriteString(config.RedisAddr)
 		buffer.WriteString(":")
-		buffer.WriteString(config.redisPort)
-		middleware.client = redis.NewClient(&redis.Options{
+		buffer.WriteString(config.RedisPort)
+		middleware.RedisClient = redis.NewClient(&redis.Options{
 			Addr:     buffer.String(),
-			Password: config.redisPassword,
+			Password: config.RedisPassword,
 			DB:       0,
 		})
-		pong, err := middleware.client.Ping().Result()
+		pong, err := middleware.RedisClient.Ping().Result()
 		fmt.Println(pong, err)
 	})
 	return middleware
@@ -126,16 +127,16 @@ func handleModif(client *redis.Client, key string) context.Context {
 	return ctxt
 }
 
-// The middleware handler
+// Basic negroni middleware function
 func (m *RedisCache) ServeHTTP(w http.ResponseWriter, req *http.Request, next http.HandlerFunc) {
 	var buffer bytes.Buffer
 
-	buffer.WriteString(m.config.prefix)
+	buffer.WriteString(m.Config.Prefix)
 	buffer.WriteString(":")
 	buffer.WriteString(req.Host)
 	buffer.WriteString(req.URL.RequestURI())
 	key := buffer.String()
-	client := m.client
+	client := m.RedisClient
 
 	var ctxt context.Context
 	if req.Method == http.MethodGet {
