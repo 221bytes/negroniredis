@@ -16,6 +16,36 @@ const (
 	httpMethod = "HTTP_METHOD"
 )
 
+var middleware *Middleware
+var once sync.Once
+
+//
+type reqWriter struct {
+	http.ResponseWriter
+	key        string
+	reqContext context.Context
+}
+
+func (w *reqWriter) Write(b []byte) (int, error) {
+
+	// we cache only get data
+	if reqMethod := w.reqContext.Value(httpMethod); reqMethod != http.MethodGet {
+		return w.ResponseWriter.Write(b)
+	}
+
+	// if request is already from the cache we shouldn't cache it again
+	if cache := w.reqContext.Value(ContextKey); cache != nil {
+		return w.ResponseWriter.Write(b)
+	}
+	// we cache new data
+	err := middleware.client.Set(w.key, string(b), middleware.config.cacheExpirationTime).Err()
+	if err != nil {
+		panic(err)
+	}
+
+	return w.ResponseWriter.Write(b)
+}
+
 type Middleware struct {
 	http.ResponseWriter
 	client *redis.Client
@@ -30,16 +60,13 @@ type Config struct {
 	prefix              string
 }
 
-var middleware *Middleware
-var once sync.Once
-
 // default configuration
 func DefaultConfig() Config {
 	return Config{
 		redisAddr:           "localhost",
 		redisPort:           "6379",
 		redisPassword:       "",
-		cacheExpirationTime: time.Second * 0,
+		cacheExpirationTime: time.Second * 2,
 		prefix:              "cache",
 	}
 }
@@ -63,32 +90,6 @@ func NewMiddleware(config Config) *Middleware {
 		fmt.Println(pong, err)
 	})
 	return middleware
-}
-
-type Writer struct {
-	http.ResponseWriter
-	key        string
-	reqContext context.Context
-}
-
-func (w *Writer) Write(b []byte) (int, error) {
-
-	// we cache only get data
-	if reqMethod := w.reqContext.Value(httpMethod); reqMethod != http.MethodGet {
-		return w.ResponseWriter.Write(b)
-	}
-
-	// if request is already from the cache we shouldn't cache it again
-	if cache := w.reqContext.Value(ContextKey); cache != nil {
-		return w.ResponseWriter.Write(b)
-	}
-	// we cache new data
-	err := middleware.client.Set(w.key, string(b), middleware.config.cacheExpirationTime).Err()
-	if err != nil {
-		panic(err)
-	}
-
-	return w.ResponseWriter.Write(b)
 }
 
 func handleGet(client *redis.Client, key string) context.Context {
@@ -127,8 +128,6 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, req *http.Request, next ht
 	key := buffer.String()
 	client := m.client
 
-	// scanner := client.Scan(0, "*", 100)
-
 	var ctxt context.Context
 	if req.Method == http.MethodGet {
 		ctxt = handleGet(client, key)
@@ -137,7 +136,7 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, req *http.Request, next ht
 	}
 	ctxt = context.WithValue(ctxt, httpMethod, req.Method)
 
-	writer := &Writer{ResponseWriter: w, key: key, reqContext: ctxt}
+	writer := &reqWriter{ResponseWriter: w, key: key, reqContext: ctxt}
 	if next != nil {
 		next(writer, req.WithContext(ctxt))
 	}
