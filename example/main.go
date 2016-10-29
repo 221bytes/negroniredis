@@ -26,8 +26,8 @@ func main() {
 		}
 		time.Sleep(time.Millisecond * 500)
 
-		toto := exampleStruct{A: false, I: 32}
-		if err := json.NewEncoder(w).Encode(&toto); err != nil {
+		foo := exampleStruct{A: false, I: 32}
+		if err := json.NewEncoder(w).Encode(&foo); err != nil {
 			panic(err)
 		}
 	})

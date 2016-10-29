@@ -12,14 +12,18 @@ import (
 )
 
 const (
+	// ContextKey is for finding the cached data in the Context
 	ContextKey = "NEGRONISREDISCACHE"
+
+	// httpMethod is for storing the method of the request in reqWriter
 	httpMethod = "HTTP_METHOD"
 )
 
-var middleware *Middleware
+var middleware *RedisCache
 var once sync.Once
 
-//
+// reqWriter is for intercepting the write of the http.ResponseWriter
+// each request will have a different reqWriter
 type reqWriter struct {
 	http.ResponseWriter
 	key        string
@@ -46,12 +50,17 @@ func (w *reqWriter) Write(b []byte) (int, error) {
 	return w.ResponseWriter.Write(b)
 }
 
-type Middleware struct {
-	http.ResponseWriter
+// RedisCache is the middleware for negroniredis
+type RedisCache struct {
 	client *redis.Client
 	config Config
 }
 
+// Config is all of the required fields needed by the cache
+// redisAddr, redisPassword and redisPassword are the parameters
+// for the redis library 	"gopkg.in/redis.v5"
+// cacheExpirationTime is for how long each data will stay in the cache
+// prefix is the prefix of every keys in the cache
 type Config struct {
 	redisAddr           string
 	redisPort           string
@@ -60,7 +69,7 @@ type Config struct {
 	prefix              string
 }
 
-// default configuration
+// DefaultConfig is basic configuration for a RedisCache
 func DefaultConfig() Config {
 	return Config{
 		redisAddr:           "localhost",
@@ -71,11 +80,11 @@ func DefaultConfig() Config {
 	}
 }
 
-// Middleware is a struct that has a ServeHTTP method
-func NewMiddleware(config Config) *Middleware {
+// NewMiddleware return a RedisCache based on a configuration
+func NewMiddleware(config Config) *RedisCache {
 	once.Do(func() {
 
-		middleware = &Middleware{config: config}
+		middleware = &RedisCache{config: config}
 		var buffer bytes.Buffer
 
 		buffer.WriteString(config.redisAddr)
@@ -118,7 +127,7 @@ func handleModif(client *redis.Client, key string) context.Context {
 }
 
 // The middleware handler
-func (m *Middleware) ServeHTTP(w http.ResponseWriter, req *http.Request, next http.HandlerFunc) {
+func (m *RedisCache) ServeHTTP(w http.ResponseWriter, req *http.Request, next http.HandlerFunc) {
 	var buffer bytes.Buffer
 
 	buffer.WriteString(m.config.prefix)
