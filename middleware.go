@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/221bytes/negroniredis/cachegroup"
 	"gopkg.in/redis.v5"
 )
 
@@ -53,8 +54,9 @@ func (w *reqWriter) Write(b []byte) (int, error) {
 
 // RedisCache is the middleware for negroniredis
 type RedisCache struct {
-	RedisClient *redis.Client
-	Config      Config
+	RedisClient       *redis.Client
+	Config            Config
+	CacheGroupManager *cachegroup.CacheGroupManager
 }
 
 // Config is all of the required fields needed by the cache
@@ -68,6 +70,7 @@ type Config struct {
 	RedisPassword       string
 	CacheExpirationTime time.Duration
 	Prefix              string
+	CGM                 *cachegroup.CacheGroupManager
 }
 
 // DefaultConfig is basic configuration for a RedisCache
@@ -76,8 +79,9 @@ func DefaultConfig() Config {
 		RedisAddr:           "localhost",
 		RedisPort:           "6379",
 		RedisPassword:       "",
-		CacheExpirationTime: time.Second * 2,
+		CacheExpirationTime: time.Second * 0,
 		Prefix:              "cache",
+		CGM:                 cachegroup.NewCacheGroupManager(),
 	}
 }
 
@@ -86,6 +90,7 @@ func NewMiddleware(config Config) *RedisCache {
 	once.Do(func() {
 
 		middleware = &RedisCache{Config: config}
+		middleware.CacheGroupManager = config.CGM
 		var buffer bytes.Buffer
 
 		buffer.WriteString(config.RedisAddr)
@@ -115,14 +120,25 @@ func handleGet(client *redis.Client, key string) context.Context {
 	return ctxt
 }
 
-func handleModif(client *redis.Client, key string) context.Context {
+func (rc *RedisCache) handleModif(req *http.Request) context.Context {
 	ctxt := context.Background()
-	fmt.Println(key)
-	err := client.Del(key).Err()
-	if err == redis.Nil {
-	} else if err != nil {
-		panic(err)
-	} else {
+	indexes := rc.CacheGroupManager.GetGroupCacheIndexes(req.URL.RequestURI())
+	for _, index := range indexes {
+		groupCache := rc.CacheGroupManager.CacheGroups[index]
+		for _, endpoint := range groupCache {
+			var buffer bytes.Buffer
+			buffer.WriteString(rc.Config.Prefix)
+			buffer.WriteString(":")
+			buffer.WriteString(req.Host)
+			buffer.WriteString(endpoint)
+			key := buffer.String()
+			err := rc.RedisClient.Del(key).Err()
+			if err == redis.Nil {
+			} else if err != nil {
+				panic(err)
+			} else {
+			}
+		}
 	}
 	return ctxt
 }
@@ -130,7 +146,6 @@ func handleModif(client *redis.Client, key string) context.Context {
 // Basic negroni middleware function
 func (m *RedisCache) ServeHTTP(w http.ResponseWriter, req *http.Request, next http.HandlerFunc) {
 	var buffer bytes.Buffer
-
 	buffer.WriteString(m.Config.Prefix)
 	buffer.WriteString(":")
 	buffer.WriteString(req.Host)
@@ -142,7 +157,7 @@ func (m *RedisCache) ServeHTTP(w http.ResponseWriter, req *http.Request, next ht
 	if req.Method == http.MethodGet {
 		ctxt = handleGet(client, key)
 	} else {
-		ctxt = handleModif(client, key)
+		ctxt = m.handleModif(req)
 	}
 	ctxt = context.WithValue(ctxt, httpMethod, req.Method)
 

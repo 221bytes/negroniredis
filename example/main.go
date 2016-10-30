@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/221bytes/negroniredis"
+	"github.com/221bytes/negroniredis/cachegroup"
 	"github.com/urfave/negroni"
 )
 
@@ -17,7 +18,9 @@ type exampleStruct struct {
 
 func main() {
 	mux := http.NewServeMux()
-
+	cg0 := cachegroup.CreateCacheGroup("/", "/test", "/toto")
+	cgm := cachegroup.NewCacheGroupManager()
+	cgm.AddCacheGroup(cg0)
 	mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
 
 		if cache := req.Context().Value(negroniredis.ContextKey); cache != nil {
@@ -34,7 +37,9 @@ func main() {
 
 	n := negroni.Classic()
 
-	n.Use(negroniredis.NewMiddleware(negroniredis.DefaultConfig()))
+	redisCacheConfig := negroniredis.DefaultConfig()
+	redisCacheConfig.CGM = cgm
+	n.Use(negroniredis.NewMiddleware(redisCacheConfig))
 
 	n.UseHandler(mux)
 
