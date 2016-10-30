@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -46,7 +47,7 @@ func (w *reqWriter) Write(b []byte) (int, error) {
 	// we cache new data
 	err := middleware.RedisClient.Set(w.key, string(b), middleware.Config.CacheExpirationTime).Err()
 	if err != nil {
-		panic(err)
+		log.Printf("redis error: %v\n", err)
 	}
 
 	return w.ResponseWriter.Write(b)
@@ -113,7 +114,7 @@ func handleGet(client *redis.Client, key string) context.Context {
 	if err == redis.Nil {
 		ctxt = context.WithValue(ctxt, ContextKey, nil)
 	} else if err != nil {
-		panic(err)
+		log.Printf("redis error: %v\n", err)
 	} else {
 		ctxt = context.WithValue(ctxt, ContextKey, cachedVal)
 	}
@@ -133,10 +134,8 @@ func (rc *RedisCache) handleModif(req *http.Request) context.Context {
 			buffer.WriteString(endpoint)
 			key := buffer.String()
 			err := rc.RedisClient.Del(key).Err()
-			if err == redis.Nil {
-			} else if err != nil {
-				panic(err)
-			} else {
+			if err != nil {
+				log.Printf("redis error: %v\n", err)
 			}
 		}
 	}
