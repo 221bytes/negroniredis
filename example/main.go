@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/221bytes/negroniredis"
-	"github.com/codegangsta/negroni"
+	"github.com/urfave/negroni"
 )
 
 type exampleStruct struct {
